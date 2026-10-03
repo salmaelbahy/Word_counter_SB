@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Heading word targets</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  :root {
+    --bg: #faf9f6;
+    --panel: #ffffff;
+    --ink: #23201b;
+    --muted: #7a746a;
+    --faint: #a8a196;
+    --line: #e4e0d7;
+    --accent: #3a5f4a;
+    --near: #d98324;
+    --over: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1815; --panel: #232019; --ink: #ece7dd; --muted: #a09a8e;
+      --faint: #6f6a5f; --line: #34302a; --accent: #8fc0a3; --near: #e8a04d; --over: #e06a5f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px; line-height: 1.5;
+  }
+  .wrap { padding: 12px; }
+  .top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 10px;
+  }
+  .top h1 {
+    font-family: Georgia, serif; font-weight: 500; font-size: 16px; margin: 0;
+  }
+  .total { font-size: 12px; color: var(--muted); }
+  .total b { color: var(--ink); font-weight: 600; }
+
+  .controls { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  button {
+    font: inherit; font-size: 12px; color: #fff; background: var(--accent);
+    border: none; border-radius: 7px; padding: 7px 12px; cursor: pointer;
+  }
+  @media (prefers-color-scheme: dark) { button { color: #16201a; } }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  .auto { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+
+  .row { padding: 9px 0; border-bottom: 1px solid var(--line); }
+  .row .head {
+    display: flex; align-items: baseline; gap: 6px; margin-bottom: 5px;
+  }
+  .row .name { font-weight: 500; flex: 1; word-break: break-word; }
+  .row .lvl { font-size: 10px; color: var(--faint); }
+  .row .count { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .lvl2 { padding-left: 12px; }
+  .lvl3 { padding-left: 24px; }
+  .lvl4, .lvl5, .lvl6 { padding-left: 36px; }
+
+  .ctrl { display: flex; align-items: center; gap: 8px; }
+  .bar { flex: 1; height: 5px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .bar span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width .18s, background .18s; }
+  .tgt {
+    width: 62px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; color: var(--ink); font: inherit; font-size: 12px; padding: 4px 6px;
+  }
+  .tgt:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .status { font-size: 11px; color: var(--muted); margin-top: 3px; min-height: 14px; }
+
+  .empty { color: var(--muted); padding: 20px 4px; text-align: center; }
+  .foot { font-size: 11px; color: var(--faint); margin-top: 10px; }
+  .credit {
+    font-size: 11px; color: var(--muted); margin-top: 10px;
+    padding-top: 8px; border-top: 1px solid var(--line); text-align: center;
+  }
+  .credit b { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>Heading targets</h1>
+    <div class="total">Total: <b id="total">0</b></div>
+  </div>
+
+  <div class="controls">
+    <button id="refresh">Refresh</button>
+    <label class="auto"><input type="checkbox" id="autoChk" checked> Auto</label>
+  </div>
+
+  <div id="list"></div>
+  <div class="foot">Targets are saved per heading on this computer. Word counts the whole document; this counts the text under each heading.</div>
+  <div class="credit">Idea &amp; design by <b>ElBahy</b> &middot; built with Claude (Opus 4.8)</div>
+</div>
+
+<script>
+(function () {
+  var TKEY = 'headingTargets.v1';
+  var targets = {};
+  try { targets = JSON.parse(localStorage.getItem(TKEY) || '{}'); } catch (e) { targets = {}; }
+
+  function saveTargets() {
+    try { localStorage.setItem(TKEY, JSON.stringify(targets)); } catch (e) {}
+  }
+  function keyFor(name, level) { return 'h' + level + '::' + name.toLowerCase(); }
+  function wordCount(s) { s = s.trim(); return s === '' ? 0 : s.split(/\s+/).length; }
+
+  function headingLevel(p) {
+    var sb = p.styleBuiltIn || '';
+    var m = /^Heading(\d)$/.exec(sb);
+    if (m) return parseInt(m[1], 10);
+    var nm = (p.style || '');
+    var m2 = /heading\s*(\d)/i.exec(nm);
+    if (m2) return parseInt(m2[1], 10);
+    if (/^(Title)$/.test(sb) || /^title$/i.test(nm)) return 1;
+    return 0;
+  }
+
+  function buildSections(paras) {
+    var sections = [];
+    var current = { name: '(Before first heading)', level: 0, words: 0, synthetic: true };
+    paras.forEach(function (p) {
+      var lvl = headingLevel(p);
+      if (lvl > 0) {
+        current = { name: p.text.trim() || '(untitled heading)', level: lvl, words: 0 };
+        sections.push(current);
+      } else {
+        current.words += wordCount(p.text);
+      }
+    });
+    // Drop the intro bucket if it never got words and no headings exist before it
+    if (sections.length === 0 || (sections[0] !== current && false)) {}
+    if (current.synthetic && current.words > 0) sections.unshift(current);
+    else if (sections.length === 0 && current.words > 0) sections.push(current);
+    return sections;
+  }
+
+  function render(sections, total) {
+    document.getElementById('total').textContent = total.toLocaleString();
+    var list = document.getElementById('list');
+    list.innerHTML = '';
+
+    if (sections.length === 0) {
+      list.innerHTML = '<div class="empty">No headings found yet. Apply Word\'s Heading styles (Heading 1, Heading 2…) and hit Refresh.</div>';
+      return;
+    }
+
+    sections.forEach(function (sec) {
+      var k = keyFor(sec.name, sec.level);
+      var tgt = targets[k];
+      var row = document.createElement('div');
+      row.className = 'row' + (sec.level > 1 ? ' lvl' + sec.level : '');
+
+      var head = document.createElement('div');
+      head.className = 'head';
+      head.innerHTML = '<span class="name">' + escapeHtml(sec.name) + '</span>'
+        + (sec.level ? '<span class="lvl">H' + sec.level + '</span>' : '')
+        + '<span class="count">' + sec.words.toLocaleString() + ' w</span>';
+      row.appendChild(head);
+
+      var ctrl = document.createElement('div');
+      ctrl.className = 'ctrl';
+      var bar = document.createElement('div');
+      bar.className = 'bar';
+      var fill = document.createElement('span');
+      bar.appendChild(fill);
+      var input = document.createElement('input');
+      input.className = 'tgt';
+      input.type = 'number'; input.min = '0'; input.step = '50';
+      input.placeholder = 'target';
+      if (tgt != null) input.value = tgt;
+      ctrl.appendChild(bar);
+      ctrl.appendChild(input);
+      row.appendChild(ctrl);
+
+      var status = document.createElement('div');
+      status.className = 'status';
+      row.appendChild(status);
+
+      function paint() {
+        var g = parseInt(input.value, 10);
+        if (!g || g <= 0) {
+          fill.style.width = '0'; status.textContent = ''; return;
+        }
+        var ratio = sec.words / g;
+        fill.style.width = Math.min(100, Math.round(ratio * 100)) + '%';
+        if (ratio > 1.1) {
+          fill.style.background = 'var(--over)';
+          status.textContent = 'Over by ' + (sec.words - g).toLocaleString() + ' words';
+        } else if (ratio >= 1) {
+          fill.style.background = 'var(--near)';
+          status.textContent = sec.words === g ? 'On target' : 'Just over (' + (sec.words - g) + ')';
+        } else {
+          fill.style.background = 'var(--accent)';
+          status.textContent = (g - sec.words).toLocaleString() + ' words to go';
+        }
+      }
+      input.addEventListener('input', function () {
+        var v = parseInt(input.value, 10);
+        if (v > 0) targets[k] = v; else delete targets[k];
+        saveTargets(); paint();
+      });
+      paint();
+      list.appendChild(row);
+    });
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function update() {
+    if (typeof Word === 'undefined') return;
+    Word.run(function (context) {
+      var paras = context.document.body.paragraphs;
+      paras.load('text,styleBuiltIn,style');
+      return context.sync().then(function () {
+        var items = paras.items.map(function (p) {
+          return { text: p.text, styleBuiltIn: p.styleBuiltIn, style: p.style };
+        });
+        var total = 0;
+        items.forEach(function (p) { if (headingLevel(p) === 0) total += wordCount(p.text); });
+        // include heading text itself in the whole-doc total
+        items.forEach(function (p) { if (headingLevel(p) > 0) total += wordCount(p.text); });
+        render(buildSections(items), total);
+      });
+    }).catch(function (e) {
+      document.getElementById('list').innerHTML =
+        '<div class="empty">Could not read the document: ' + escapeHtml(String(e.message || e)) + '</div>';
+    });
+  }
+
+  var timer = null;
+  function setAuto(on) {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (on) timer = setInterval(update, 2000);
+  }
+
+  Office.onReady(function (info) {
+    if (info.host !== Office.HostType.Word) {
+      document.getElementById('list').innerHTML =
+        '<div class="empty">This add-in runs inside Microsoft Word.</div>';
+      return;
+    }
+    document.getElementById('refresh').addEventListener('click', update);
+    document.getElementById('autoChk').addEventListener('change', function (e) {
+      setAuto(e.target.checked);
+    });
+    setAuto(true);
+    update();
+  });
+})();
+</script>
+</body>
+</html>
